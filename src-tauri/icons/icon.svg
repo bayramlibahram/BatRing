@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="BatRing">
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="#0f172a"/>
+  <circle cx="256" cy="256" r="158" fill="none" stroke="#38bdf8" stroke-width="24"/>
+  <path
+    fill="#ffffff"
+    d="M164 116h104c68 0 100 30 100 78 0 30-14 53-41 66 37 11 56 36 56 72 0 57-38 84-112 84H164V116Zm72 58v61h29c22 0 33-10 33-30s-11-31-35-31h-27Zm0 117v67h36c27 0 40-11 40-34s-14-33-41-33h-35Z"
+  />
+</svg>

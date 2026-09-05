@@ -1,0 +1,28 @@
+[package]
+name = "batring"
+version = "0.1.0"
+description = "A compact Linux desktop utility for local development services"
+authors = ["BatRing contributors"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "batring_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", optional = true, default-features = false, features = [
+    "wry",
+    "compression",
+    "common-controls-v6",
+    "dynamic-acl",
+    "x11",
+] }
