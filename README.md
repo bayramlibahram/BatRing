@@ -1,145 +1,210 @@
-# BatRing
+<h1 align="center">BatRing</h1>
 
-BatRing is a Linux-only Tauri desktop utility for managing local development services through systemd.
+<p align="center">
+  A small Linux desktop app for starting, stopping, and auto-starting your local development services.
+</p>
 
-## Managed services
+<p align="center">
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-333">
+  <img alt="Built with Tauri" src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.77%2B-CE422B">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
-| ID | Display name | systemd unit |
-| --- | --- | --- |
-| `postgresql` | PostgreSQL | `postgresql.service` |
-| `docker` | Docker | `docker.service` |
-| `mongodb` | MongoDB | `mongod.service` |
+---
 
-Every registered service supports:
-
-- status detection: Running, Stopped, Failed, Unknown, or Not installed
-- startup detection: Enabled, Disabled, Static, or Masked
-- Start, Stop, Restart (runtime state)
-- Enable Startup, Disable Startup (boot behaviour, never touches runtime state)
-- structured errors returned to the React UI
-- rejection of any service ID not present in the Rust registry
-
-A registered service whose unit is missing (for example MongoDB on a machine
-without the `mongodb-org` package) is shown as **Not installed** and its
-actions are hidden. It never breaks the other cards.
-
-## Bulk controls
-
-The header of the main view offers:
+PostgreSQL, Docker, and MongoDB all live behind `systemctl`. BatRing puts them
+in one window, so you stop memorising unit names and typing your password over
+and over.
 
 ```text
-Services   [ Start All ] [ Stop All ] [ Restart All ]
-Startup    [ Enable All ] [ Disable All ]
+┌──────────────────────────────────────────────────────────┐
+│  B  BatRing                                       LINUX  │
+├──────────────────────────────────────────────────────────┤
+│  Services   [ Start All ]  [ Stop All ]  [ Restart All ] │
+│  Startup    [ Enable All ]  [ Disable All ]              │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ PostgreSQL                            ● Running    │  │
+│  │ postgresql.service               Startup: Enabled  │  │
+│  │ [ Stop ]  [ Restart ]  [ Disable Startup ]         │  │
+│  └────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ Docker                                ● Running    │  │
+│  │ docker.service                   Startup: Enabled  │  │
+│  │ [ Stop ]  [ Restart ]  [ Disable Startup ]         │  │
+│  └────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ MongoDB                               ○ Stopped    │  │
+│  │ mongod.service                  Startup: Disabled  │  │
+│  │ [ Start ]  [ Restart ]  [ Enable Startup ]         │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
 ```
 
-Each bulk action iterates the Rust registry and applies the matching
-single-service action. One failing service does not stop the others; every
-service gets a structured result (`serviceId`, `name`, `success`, `message`,
-optional `service` snapshot, optional `error`). The UI renders a summary such
-as "2 services started · 1 service failed" plus the per-service rows.
+## Features
 
-A bulk run prompts for a password at most once, because PolicyKit retains the
-authorization for the rest of the window (see Privileges below). The only
-short-circuit is an authorization failure: if that single prompt is refused, or
-no authentication agent answers it, the remaining services would fail
-identically, so they are reported as skipped rather than retried. Every other
-kind of failure lets the loop continue.
+- **One window for every service.** Live status and startup state at a glance.
+- **Individual controls.** Start, Stop, Restart, Enable Startup, Disable Startup.
+- **Bulk controls.** Do all five to every service at once.
+- **Runtime and boot are kept separate.** Stopping a service never disables it,
+  and disabling startup never stops it.
+- **One password prompt per session, not per click.** See
+  [Authorization](#authorization).
+- **Partial failures are visible.** If one service fails, the others still run
+  and you get a per-service report.
+- **Missing services degrade gracefully.** A service that is not installed is
+  labelled as such instead of breaking the list.
+- **No shell, ever.** The UI cannot name a unit or a command. See
+  [Security](#security).
 
-`Enable All` / `Disable All` run `systemctl enable|disable <unit>` without
-`--now`, so they never start or stop anything.
+## Supported services
 
-## Architecture
-
-```text
-React (ServiceCard, BulkControls, BulkSummary)
-      ↓ invoke("start_service", { serviceId: "docker" })   or   invoke("start_all_services")
-Tauri command handler (src-tauri/src/commands.rs)
-      ↓ resolve ID against the fixed SERVICES registry
-Rust systemd adapter (src-tauri/src/systemd.rs)
-      ↓
-systemctl  ->  systemd over D-Bus  ->  PolicyKit
-```
-
-The frontend never sends unit names or shell commands. Rust accepts a service
-ID, resolves it against a fixed registry, and invokes `systemctl` directly with
-a two-element constant argument vector; no shell is involved. Reads and writes
-use the same binary, and privilege is decided by systemd and PolicyKit rather
-than by BatRing elevating itself.
-
-## Privileges
-
-Reads (`systemctl show`, `is-active`, `is-enabled`) run as the desktop user and
-authorize nothing.
-
-Mutations also run as the desktop user:
-
-```bash
-systemctl start|stop|restart|enable|disable <registered-unit>
-```
-
-`systemctl` forwards the request to systemd over D-Bus, and systemd asks
-PolicyKit to authorize it against:
-
-| Action | PolicyKit action | Typical desktop setting |
+| Service | Internal ID | systemd unit |
 | --- | --- | --- |
-| start, stop, restart | `org.freedesktop.systemd1.manage-units` | `auth_admin_keep` |
-| enable, disable | `org.freedesktop.systemd1.manage-unit-files` | `auth_admin_keep` |
+| PostgreSQL | `postgresql` | `postgresql.service` |
+| Docker | `docker` | `docker.service` |
+| MongoDB | `mongodb` | `mongod.service` |
 
-The `_keep` suffix is the important part: PolicyKit retains a successful
-authorization for a short window, so the session's authentication agent prompts
-once and subsequent actions, including a full bulk run, go through without
-another password.
+Adding another takes one entry in a Rust array and nothing else. See
+[Adding a service](#adding-a-service).
 
-BatRing deliberately does **not** use `pkexec`. That path is checked against
-`org.freedesktop.policykit.exec`, which is plain `auth_admin` with no
-retention, so every single click would re-prompt. It also grants "run this
-program as root" rather than the narrower "manage this unit".
+## Requirements
 
-Requirements: BatRing must not be run as root, the user must be a PolicyKit
-administrator (on Ubuntu, a member of `sudo` or `admin`), and a graphical
-PolicyKit authentication agent must be running. Without an agent, systemd
-reports that interactive authentication was never enabled and BatRing surfaces
-that as a `permission_denied` error rather than a generic failure.
+- Linux with systemd
+- PolicyKit, plus a graphical authentication agent (every mainstream desktop
+  ships one)
+- A user account in the `sudo` or `admin` group
+- GTK 3 and WebKitGTK 4.1
 
-## Development
+BatRing must **not** be run as root. It is designed to run as you and let
+PolicyKit approve each privileged operation.
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full guide: prerequisites,
-dev mode, production builds, installers, tests, and troubleshooting.
+## Install
 
-Prerequisites include Node.js, Rust, the Tauri 2 Linux system dependencies, systemd, and PolicyKit.
+There are no published releases yet, so build the bundles first with
+`npm run tauri build` and install from
+`src-tauri/target/release/bundle/`.
+
+**Debian / Ubuntu**
 
 ```bash
+sudo apt install ./BatRing_0.1.0_amd64.deb
+batring
+```
+
+**AppImage** (portable, no install)
+
+```bash
+chmod +x BatRing_0.1.0_amd64.AppImage
+./BatRing_0.1.0_amd64.AppImage
+```
+
+**From source**
+
+```bash
+git clone git@github.com:bayramlibahram/BatRing.git
+cd BatRing
 npm install
-npm run tauri dev
+npm run tauri build
 ```
 
-Checks:
+Bundles land in `src-tauri/target/release/bundle/`. Full instructions are in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-```bash
-npm run build
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri -- build --debug --no-bundle
+## Usage
+
+### Runtime versus startup
+
+These are two independent things, and BatRing keeps them apart on purpose.
+
+| | Controls | Effect |
+| --- | --- | --- |
+| **Runtime** | Start, Stop, Restart | Whether the service is running right now |
+| **Startup** | Enable, Disable | Whether it comes back after a reboot |
+
+A service can be running while disabled at boot, or stopped while enabled. The
+card shows both states, and the bulk section keeps them in separate rows.
+
+`Enable All` will not start anything. `Disable All` will not stop anything.
+BatRing never passes `--now` to `systemctl`.
+
+### Bulk actions and partial failure
+
+A bulk action walks the registry and reports on every service independently.
+One failure does not cancel the rest:
+
+```text
+Start All
+2 services started · 1 service failed
+
+  ✓ PostgreSQL   Started
+  ✓ Docker       Started
+  ✗ MongoDB      MongoDB is not installed or its unit was not found.
 ```
 
-Read-only smoke test against the real systemd on this machine (no prompts, no
-mutations):
+The one exception is authorization. If the single password prompt is refused,
+or no authentication agent answers it, the remaining services would fail
+identically, so they are reported as skipped rather than retried.
 
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_ --nocapture
+## Authorization
+
+BatRing asks for your password **once**, then stays quiet for the next few
+minutes, including across bulk actions.
+
+That is a deliberate design choice, not a default. There are two ways a desktop
+app can run a privileged `systemctl` command, and they behave very differently:
+
+| Approach | PolicyKit action consulted | Setting | Prompts |
+| --- | --- | --- | --- |
+| `pkexec systemctl ...` | `org.freedesktop.policykit.exec` | `auth_admin` | **every single time** |
+| `systemctl ...` over D-Bus | `org.freedesktop.systemd1.manage-units` and `manage-unit-files` | `auth_admin_keep` | **once, then cached** |
+
+BatRing takes the second path. It runs `systemctl` as your normal user;
+`systemctl` forwards the request to systemd over D-Bus, and systemd asks
+PolicyKit to authorize it. The `_keep` suffix means PolicyKit retains a
+successful authorization for a short window.
+
+The security win matters as much as the convenience one. `pkexec` grants "run
+this program as root". The D-Bus path grants only "manage this systemd unit".
+
+## Security
+
+The frontend never names a unit and never builds a command.
+
+```text
+React
+  │  invoke("start_service", { serviceId: "mongodb" })
+  ▼
+Tauri command handler          src-tauri/src/commands.rs
+  │  resolve the ID against a fixed SERVICES registry
+  │  postgresql → postgresql.service
+  │  docker     → docker.service
+  │  mongodb    → mongod.service
+  ▼
+systemd adapter                src-tauri/src/systemd.rs
+  │  Command::new("/usr/bin/systemctl").args(["start", "mongod.service"])
+  ▼
+systemd over D-Bus  →  PolicyKit  →  authentication agent
 ```
 
-If the Tauri Linux packages (`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`)
-are unavailable, the systemd core can still be checked with:
+Concretely, that means:
 
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml --no-default-features
-```
+- Unit names are `&'static str` compile-time constants. An ID that is not in
+  the registry is rejected before systemd is touched.
+- Arguments are a fixed two-element array. No shell is spawned, so there is
+  nothing to inject into.
+- Reads (`is-active`, `is-enabled`, `show`) are unprivileged and prompt for
+  nothing.
+- The unit is checked for existence before any mutation, so a missing service
+  fails fast without a pointless password prompt.
+- BatRing is never root and holds no elevated privileges of its own.
 
-## How to add another service to BatRing
+## Adding a service
 
-The service flow is generic. To add Redis (unit `redis-server.service` on
-Debian/Ubuntu), append one entry to `SERVICES` in `src-tauri/src/commands.rs`:
+The whole flow is generic. To add Redis, append one entry to `SERVICES` in
+`src-tauri/src/commands.rs`:
 
 ```rust
 ServiceDefinition {
@@ -149,15 +214,75 @@ ServiceDefinition {
 },
 ```
 
-Then:
+That is the entire feature. No React component, Tauri command, or systemd code
+changes. `get_services()` returns Redis, `App.jsx` renders another
+`ServiceCard`, every single-service command resolves the new ID through the
+registry, and all five bulk commands pick it up because they iterate the same
+list.
 
-1. Add a registry test next to `resolves_mongodb_service_to_mongod_unit`
-   asserting `resolve_service("redis")` returns `redis-server.service`.
-2. Update the expected order in `keeps_registry_order` and
-   `bulk_operations_touch_only_registered_services_in_order`.
-3. Run the checks above.
+Then update the two tests that assert registry contents and run the checks:
 
-Nothing else changes. `get_services()` returns Redis to React, `App.jsx`
-renders another `ServiceCard`, every single-service command resolves `redis`
-through the registry, and all five bulk commands pick it up automatically
-because they iterate `SERVICES`.
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build
+```
+
+## Architecture
+
+```text
+src/                             React frontend
+  App.jsx                        state and command invocation
+  components/ServiceCard.jsx     one card, reused for every service
+  components/BulkControls.jsx    Start All / Stop All / Restart All / ...
+  components/BulkSummary.jsx     per-service results
+src-tauri/src/
+  commands.rs                    SERVICES registry, 12 Tauri commands
+  systemd.rs                     systemctl adapter, error classification
+  models.rs                      types serialized to React
+  lib.rs                         command registration
+docs/DEVELOPMENT.md              build, run, test, troubleshoot
+```
+
+Twelve commands are exposed: `get_services`, `get_service_status`, five
+single-service actions, and five bulk actions.
+
+Errors reach React as structured values, never strings, with a `code` of
+`unknown_service`, `unit_not_found`, `permission_denied`,
+`authorization_cancelled`, `systemd_unavailable`, or `command_failed`.
+
+## Development
+
+```bash
+npm install
+npm run tauri dev
+```
+
+Checks:
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path src-tauri/Cargo.toml      # 34 tests
+npm run build
+npm run tauri -- build --debug --no-bundle
+```
+
+The test suite is fully mocked and never touches a real service. A separate
+read-only test inspects the real systemd on your machine without prompting or
+mutating anything:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_ --nocapture
+```
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full guide.
+
+## Roadmap
+
+- Recent journal output per service
+- Redis and Nginx in the default registry
+- A dedicated PolicyKit action so the prompt can be scoped to BatRing itself
+- Tray icon with at-a-glance status
+
+## License
+
+MIT. See [LICENSE](LICENSE).
